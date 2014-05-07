@@ -1,0 +1,422 @@
+#!/bin/sh
+# Snapshot Utility for working with system updates
+#
+# Copyright (c) 2014, Jolla Ltd.
+# Contact: Thomas Perl <thomas.perl@jolla.com>
+#
+# Permission to use, copy, modify, and/or distribute this software for any
+# purpose with or without fee is hereby granted, provided that the above
+# copyright notice and this permission notice appear in all copies.
+#
+# THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+# REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+# FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+# INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+# LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+# OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+# PERFORMANCE OF THIS SOFTWARE.
+
+set -e
+
+PROG=$(basename $0)
+
+if [ "%PREFIX%" = '%'PREFIX'%' ]; then
+    echo "Running from source. Set variables manually."
+else
+    # Include configuration from system
+    for file in %PREFIX%/share/$PROG/*.conf; do
+        . $file
+    done
+fi
+
+if [ "%VERSION%" = '%'VERSION'%' ]; then
+    VERSION="git"
+else
+    VERSION="%VERSION%"
+fi
+
+NOW=$(date +%s)
+
+mount_btrfs() {
+    if [ ! -d $MOUNTPOINT ]; then
+        mkdir -p $MOUNTPOINT
+    fi
+
+    if grep -q $MOUNTPOINT /proc/mounts; then
+        umount $MOUNTPOINT
+    fi
+    mount -t btrfs -o subvolid=0 $PARTITION $MOUNTPOINT
+
+    # Hack to get subvolume properly seen when "@" is mounted
+    ls -la $MOUNTPOINT >/dev/null 2>/dev/null
+    ls -la $MOUNTPOINT >/dev/null 2>/dev/null
+}
+
+unmount_btrfs() {
+    umount $MOUNTPOINT
+}
+
+version_info() {
+    echo "$PROG $VERSION"
+}
+
+usage() {
+    version_info
+    echo ""
+    echo "Usage: $PROG [list|purge|enter]"
+    echo "       $PROG [create|delete|restore|enter] <target>"
+    echo "       $PROG [create|rename] <source> <target>"
+    echo "       $PROG [inject] <rootfs> <homefs> <target>"
+    echo "       $PROG [export] <source> <directory>"
+    echo "       $PROG [-h|--help]"
+    echo "       $PROG [-v|--version]"
+    echo ""
+    echo "    $PROG list ........ List existing snapshots"
+    echo "    $PROG purge ....... Remove saved snapshots"
+    echo "    $PROG create ...... Create a new snapshot (default: from current system)"
+    echo "    $PROG delete ...... Delete an existing snapshot"
+    echo "    $PROG restore ..... Restore a snapshot, set default and flash partitions"
+    echo "    $PROG enter ....... Enter a chroot of a snapshot (default: current system)"
+    echo "    $PROG rename ...... Rename an existing snapshot"
+    echo "    $PROG inject ...... Extract a slipstream factory image"
+    echo "    $PROG export ...... Create a slipstream factory image"
+    echo ""
+    echo "    $PROG [-v|--version] .... Print program version and exit"
+    echo "    $PROG [-h|--help] ....... Print usage information and exit"
+    echo ""
+}
+
+fail() {
+    echo "Failure: $*"
+    exit 1
+}
+
+fail_usage() {
+    usage
+    fail $*
+}
+
+require_argument() {
+    if [ -z "$1" ]; then
+        fail_usage "$CMD requires an argument"
+    fi
+}
+
+list_snapshots() {
+    for d in $MOUNTPOINT/*-@; do
+        BASENAME=$(basename $d | sed -e 's/-@$//g')
+        if [ -d $d -a -d $MOUNTPOINT/${BASENAME}-@home ]; then
+            echo "$BASENAME"
+        fi
+    done
+}
+
+snapshot_os_version() {
+    if [ -d $MOUNTPOINT/$1-@ ]; then
+        # Example line: "BUILD: Jolla-1.0.5.16-SbJ-armv7hl"
+        cat $MOUNTPOINT/$1-@/etc/mer-release | grep BUILD: | cut -d- -f2
+    else
+        echo "???"
+    fi
+}
+
+snapshot_flags() {
+    if [ ! -f $MOUNTPOINT/$1-@home/nemo/.jolla-startupwizard-done ]; then
+        echo -n ", factory"
+    fi
+}
+
+create_snapshot() {
+    btrfs subvolume snapshot $MOUNTPOINT/$1 $MOUNTPOINT/$2
+}
+
+delete_snapshot() {
+    if [ ! -d $MOUNTPOINT/$1 ]; then
+        fail "Snapshot does not exist: $1"
+    fi
+    (cd $MOUNTPOINT && btrfs subvolume delete $1)
+}
+
+rename_snapshot() {
+    if [ ! -d $MOUNTPOINT/$1 ]; then
+        fail "Rename source does not exist: $1"
+    fi
+    if [ -d $MOUNTPOINT/$2 ]; then
+        fail "Rename target already exists: $2"
+    fi
+    mv $MOUNTPOINT/$1 $MOUNTPOINT/$2
+}
+
+assume_snapshot_exists() {
+    if [ ! -d $MOUNTPOINT/$1-@ -o ! -d $MOUNTPOINT/$1-@home ]; then
+        fail "Snapshot does not exist: $1"
+    fi
+}
+
+assume_snapshot_does_not_exist() {
+    if [ -d $MOUNTPOINT/$1-@ -o -d $MOUNTPOINT/$1-@home ]; then
+        fail "Snapshot already exists: $1"
+    fi
+}
+
+make_system_bootable() {
+    if [ ! -d $MOUNTPOINT/@ -o ! -d $MOUNTPOINT/@home ]; then
+        fail "Cannot make system bootable (@ and @home missing)"
+    fi
+
+    echo "Marking @ as default subvolume"
+    (cd $MOUNTPOINT && btrfs subvolume set-default . @)
+
+    echo "Running partition flash scripts"
+    mount --bind /sys $MOUNTPOINT/@/sys
+    mount --bind /dev $MOUNTPOINT/@/dev
+    mount --bind /proc $MOUNTPOINT/@/proc
+    chroot $MOUNTPOINT/@  sh -c 'for i in /var/lib/platform-updates/*; do sh -x $i; done'
+    umount $MOUNTPOINT/@/sys $MOUNTPOINT/@/dev $MOUNTPOINT/@/proc
+
+    echo "Fixing UUID in /etc/fstab of rootfs"
+    # Example output line:
+    # UUID=c973a422-ca53-4ac3-bc8b-60bbc6320cff  /  btrfs  defaults,autodefrag,noatime 0 0
+    OLD_UUID=$(grep -o 'UUID=[^ ]*' $MOUNTPOINT/@/etc/fstab | head -n1 | cut -d= -f2)
+    # Example output line:
+    # Label: 'sailfish'  uuid: c973a422-ca53-4ac3-bc8b-60bbc6320cff
+    NEW_UUID=$(btrfs filesystem show | grep -o 'uuid:.*' | head -n1 | cut -d' ' -f2)
+
+    if [ "$OLD_UUID" != "$NEW_UUID" ]; then
+        echo "Old UUID: $OLD_UUID"
+        echo "New UUID: $NEW_UUID"
+        sed -i -e "s/$OLD_UUID/$NEW_UUID/g" $MOUNTPOINT/@/etc/fstab
+    else
+        echo "UUID ($OLD_UUID) is already correct"
+    fi
+}
+
+make_subvolume_from_tarball() {
+    btrfs subvolume create $MOUNTPOINT/$2
+    echo "Extracting $(basename $1) to $MOUNTPOINT/$2/"
+    tar --extract --bzip2 --atime-preserve --numeric-owner \
+        --preserve-permissions --preserve-order --acls --xattrs \
+        --file $1 -C $MOUNTPOINT/$2/
+    echo "Extraction done."
+}
+
+make_tarball_from_subvolume() {
+    SUBVOLUME=$1
+    TARBALL=$2
+    echo "Exporting $MOUNTPOINT/$1/ to $(basename $2)"
+    tar --create --bzip2 --atime-preserve --numeric-owner \
+        --preserve-permissions --preserve-order --acls --xattrs \
+        --one-file-system --file $2 --directory=$MOUNTPOINT/$1/ .
+    echo "Exporting done."
+}
+
+if [ "$(id -u)" != "0" ]; then
+    fail "This script must be run as root."
+fi
+
+if [ -z "$PARTITION" ]; then
+    fail "Configuration incomplete (set \$PARTITION to the btrfs partition)"
+elif [ -z "$MOUNTPOINT" ]; then
+    fail "Configuration incomplete (set \$MOUNTPOINT to the temp mountpoint)"
+fi
+
+if [ $# -lt 1 ]; then
+    fail_usage "No command given."
+fi
+
+CMD=$1
+shift
+
+case $CMD in
+    list)
+        mount_btrfs
+        for snapshot in $(list_snapshots); do
+            VERSION=$(snapshot_os_version $snapshot)
+            FLAGS=$(snapshot_flags $snapshot)
+            echo " - $(printf "%-30s" $snapshot)    (Sailfish OS $VERSION$FLAGS)"
+        done
+        unmount_btrfs
+        ;;
+    purge)
+        echo "TODO"
+        for snapshot in $(list_snapshots); do
+            true
+            # TODO: Check if $snapshot begins with saved-
+        done
+        ;;
+    enter)
+        if [ $# -eq 1 ]; then
+            mount_btrfs
+            assume_snapshot_exists $1
+            unmount_btrfs
+            ROOTFS="$1-@"
+            HOMEFS="$1-@home"
+            shift
+        else
+            ROOTFS="@"
+            HOMEFS="@home"
+        fi
+
+        echo "Mounting / from $ROOTFS"
+        mount -t btrfs -o subvol=$ROOTFS $PARTITION $MOUNTPOINT
+        echo "Mounting /home from $HOMEFS"
+        mount -t btrfs -o subvol=$HOMEFS $PARTITION $MOUNTPOINT/home
+        for path in /proc /sys /dev; do
+            echo "Bind-mounting $path"
+            mount --bind $path $MOUNTPOINT$path
+        done
+
+        echo "Entering chroot"
+        chroot $MOUNTPOINT
+
+        for path in /proc /sys /dev /home; do
+            echo "Unmounting $path"
+            umount $MOUNTPOINT$path
+        done
+
+        echo "Unmounting rootfs"
+        umount $MOUNTPOINT
+        ;;
+    create)
+        if [ $# -eq 1 ]; then
+            SOURCE=""
+            DEST="$1"
+            shift
+        elif [ $# -eq 2 ]; then
+            SOURCE="$1"
+            shift
+            DEST="$1"
+            shift
+        else
+            fail_usage "Missing argument(s)"
+        fi
+        mount_btrfs
+        assume_snapshot_does_not_exist $DEST
+        if [ "$SOURCE" == "" ]; then
+            echo "Creating snapshot of current active system"
+            create_snapshot @ $DEST-@
+            create_snapshot @home $DEST-@home
+        else
+            echo "Creating snapshot of $SOURCE"
+            create_snapshot $SOURCE-@ $DEST-@
+            create_snapshot $SOURCE-@home $DEST-@home
+        fi
+        unmount_btrfs
+        ;;
+    delete)
+        if [ "$1" == "" ]; then
+            fail_usage "Missing argument"
+        elif [ "$1" == "factory" ]; then
+            fail "Deleting the factory snapshot is a really bad idea"
+        fi
+        SNAPSHOT="$1"
+        shift
+        mount_btrfs
+        delete_snapshot $SNAPSHOT-@
+        delete_snapshot $SNAPSHOT-@home
+        unmount_btrfs
+        ;;
+    restore)
+        if [ "$1" == "" ]; then
+            fail_usage "Missing argument"
+        fi
+        SNAPSHOT="$1"
+        shift
+        mount_btrfs
+        assume_snapshot_exists $SNAPSHOT
+
+        # Backup current system system
+        rename_snapshot @ saved-$NOW-@
+        rename_snapshot @home saved-$NOW-@home
+
+        # Move snapshot to current system
+        create_snapshot $SNAPSHOT-@ @
+        create_snapshot $SNAPSHOT-@home @home
+
+        # Make new current system bootable
+        make_system_bootable
+
+        unmount_btrfs
+        ;;
+    rename)
+        if [ $# -eq 2 ]; then
+            SOURCE="$1"
+            shift
+            DEST="$1"
+            shift
+        else
+            fail_usage "Missing arguments"
+        fi
+        mount_btrfs
+        assume_snapshot_exists $SOURCE
+        echo "Renaming: $SOURCE -> $DEST"
+        rename_snapshot $SOURCE-@ $DEST-@
+        rename_snapshot $SOURCE-@home $DEST-@home
+        unmount_btrfs
+        ;;
+    inject)
+        if [ $# -eq 3 ]; then
+            ROOTFS_TAR="$1"
+            shift
+            HOMEFS_TAR="$1"
+            shift
+            TARGET="$1"
+            shift
+        else
+            fail_usage "Missing arguments"
+        fi
+
+        if [ ! -f "$ROOTFS_TAR" ]; then
+            fail "rootfs tarball does not exist: $ROOTFS_TAR"
+        fi
+        if [ ! -f "$HOMEFS_TAR" ]; then
+            fail "homefs tarball does not exist: $HOMEFS_TAR"
+        fi
+
+        mount_btrfs
+        assume_snapshot_does_not_exist $TARGET
+        echo "Slipstreaming factory image"
+        echo "rootfs from $ROOTFS_TAR"
+        echo "homefs from $HOMEFS_TAR"
+        make_subvolume_from_tarball $ROOTFS_TAR $TARGET-@
+        make_subvolume_from_tarball $HOMEFS_TAR $TARGET-@home
+        unmount_btrfs
+        ;;
+    export)
+        if [ $# -eq 2 ]; then
+            SOURCE="$1"
+            shift
+            OUTDIR="$1"
+            shift
+        else
+            fail_usage "Missing arguments"
+        fi
+
+        mount_btrfs
+        assume_snapshot_exists $SOURCE
+
+        VERSION="$(snapshot_os_version $SOURCE)"
+        ROOTFS_TAR="$OUTDIR/rootfs-$SOURCE-$VERSION.tar.bz2"
+        HOMEFS_TAR="$OUTDIR/homefs-$SOURCE-$VERSION.tar.bz2"
+
+        if [ -f "$ROOTFS_TAR" ]; then
+            fail "rootfs tarball already exists: $ROOTFS_TAR"
+        fi
+        if [ -f "$HOMEFS_TAR" ]; then
+            fail "homefs tarball already exists: $HOMEFS_TAR"
+        fi
+
+        make_tarball_from_subvolume $SOURCE-@ $ROOTFS_TAR
+        make_tarball_from_subvolume $SOURCE-@home $HOMEFS_TAR
+        unmount_btrfs
+        ;;
+    -h|--help|help)
+        usage
+        ;;
+    -v|--version|version)
+        version_info
+        ;;
+    *)
+        fail_usage "Unknown command"
+        ;;
+esac

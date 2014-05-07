@@ -1,0 +1,21 @@
+Sailfish Snapshot and OS Update Utility
+---------------------------------------
+
+          ,,I will backup my data before playing with this utility.``
+
+                                            -- you (hopefully)
+
+
+This utility allows you to work with factory snapshots, carry out OS factory
+image updates for Sailfish OS and make and restore snapshots of your live
+system easily by wrapping the btrfs snapshot utilities and carrying out all
+actions required to activate a btrfs snapshot.
+
+For advanced users, it also allows to easily enter a chroot of a given snapshot
+to carry out maintenance tasks. The utility can work from a live system as
+well as from the recovery partition.
+
+Be careful, this utility works on the underlying btrfs subvolume zero, which
+means that wrong use of the utility can lead to bricking your device to a
+point where the factory image isn't available anymore, so factory reset does
+not work. It is recommended that you make a copy of your factory image.
