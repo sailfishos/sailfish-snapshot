@@ -113,8 +113,8 @@ list_snapshots() {
 
 snapshot_os_version() {
     if [ -d $MOUNTPOINT/$1-@ ]; then
-        # Example line: "BUILD: Jolla-1.0.5.16-SbJ-armv7hl"
-        cat $MOUNTPOINT/$1-@/etc/mer-release | grep BUILD: | cut -d- -f2
+        # Example line: "VERSION_ID=1.0.6.10"
+        grep VERSION_ID $MOUNTPOINT/$1-@/etc/sailfish-release | cut -d= -f2
     else
         echo "???"
     fi
