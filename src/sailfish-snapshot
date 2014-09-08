@@ -165,7 +165,8 @@ make_system_bootable() {
     fi
 
     echo "Marking @ as default subvolume"
-    (cd $MOUNTPOINT && btrfs subvolume set-default . @)
+    SUBVOLID=$(btrfs subvolume list $MOUNTPOINT | sed -n 's/ID\ \([0-9]*\).*path\ @$/\1/p')
+    (cd $MOUNTPOINT && btrfs subvolume set-default $SUBVOLID .)
 
     echo "Running partition flash scripts"
     mount --bind /sys $MOUNTPOINT/@/sys

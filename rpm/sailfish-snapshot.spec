@@ -2,13 +2,13 @@
 %define version_info %{version}-%{release}
 
 Name:          sailfish-snapshot
-Version:       1.0.1
+Version:       1.0.2
 Release:       1
 Summary:       %{package_summary}
 Group:         System/Base
 License:       ISC
 Source0:       %{name}-%{version}.tar.gz
-Requires:      btrfs-progs
+Requires:      btrfs-progs >= 3.16
 Requires:      util-linux
 Requires:      coreutils
 Requires:      tar
