@@ -1,7 +1,7 @@
 #!/bin/sh
 # Snapshot Utility for working with system updates
 #
-# Copyright (c) 2014, Jolla Ltd.
+# Copyright (c) 2014, 2015, Jolla Ltd.
 # Contact: Thomas Perl <thomas.perl@jolla.com>
 #
 # Permission to use, copy, modify, and/or distribute this software for any
@@ -67,6 +67,7 @@ usage() {
     echo "       $PROG [create|delete|restore|enter] <target>"
     echo "       $PROG [create|rename] <source> <target>"
     echo "       $PROG [inject] <rootfs> <homefs> <target>"
+    echo "       $PROG [deploy] </path/to/utility> <target>"
     echo "       $PROG [export] <source> <directory>"
     echo "       $PROG [-h|--help]"
     echo "       $PROG [-v|--version]"
@@ -80,6 +81,7 @@ usage() {
     echo "    $PROG rename ...... Rename an existing snapshot"
     echo "    $PROG inject ...... Extract a slipstream factory image"
     echo "    $PROG export ...... Create a slipstream factory image"
+    echo "    $PROG deploy ...... Deploy a factory image using an utility"
     echo ""
     echo "    $PROG [-v|--version] .... Print program version and exit"
     echo "    $PROG [-h|--help] ....... Print usage information and exit"
@@ -190,6 +192,16 @@ make_system_bootable() {
     else
         echo "UUID ($OLD_UUID) is already correct"
     fi
+}
+
+make_subvolume_from_command() {
+    CMD_TO_RUN="$1"
+    SUBVOLUME_TO_CREATE="$MOUNTPOINT/$2"
+
+    btrfs subvolume create $SUBVOLUME_TO_CREATE
+    echo "Running '${CMD_TO_RUN}' in ${SUBVOLUME_TO_CREATE}..."
+    (set -e && cd "${SUBVOLUME_TO_CREATE}" && ${CMD_TO_RUN})
+    echo "done."
 }
 
 make_subvolume_from_tarball() {
@@ -381,6 +393,27 @@ case $CMD in
         echo "homefs from $HOMEFS_TAR"
         make_subvolume_from_tarball $ROOTFS_TAR $TARGET-@
         make_subvolume_from_tarball $HOMEFS_TAR $TARGET-@home
+        unmount_btrfs
+        ;;
+    deploy)
+        if [ $# -eq 2 ]; then
+            UTILITY_PATH="$1"
+            shift
+            TARGET="$1"
+            shift
+        else
+            fail_usage "Missing arguments"
+        fi
+
+        if [ ! -x "$UTILITY_PATH" ]; then
+            fail "Deployment utility does not exist: $UTILITY_PATH"
+        fi
+
+        mount_btrfs
+        assume_snapshot_does_not_exist $TARGET
+        echo "Slipstreaming factory image"
+        make_subvolume_from_command "$UTILITY_PATH @ $MOUNTPOINT/@ $MOUNTPOINT/*-@" "$TARGET-@"
+        make_subvolume_from_command "$UTILITY_PATH @home $MOUNTPOINT/@home $MOUNTPOINT/*-@home" "$TARGET-@home"
         unmount_btrfs
         ;;
     export)
