@@ -2,7 +2,7 @@
 %define version_info %{version}-%{release}
 
 Name:          sailfish-snapshot
-Version:       1.0.2
+Version:       1.0.4
 Release:       1
 Summary:       %{package_summary}
 Group:         System/Base
