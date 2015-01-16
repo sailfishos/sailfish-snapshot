@@ -164,6 +164,24 @@ assume_snapshot_does_not_exist() {
     fi
 }
 
+fix_btrfs_uuid() {
+    echo "Fixing UUID in /etc/fstab of $1"
+    # Example output line:
+    # UUID=c973a422-ca53-4ac3-bc8b-60bbc6320cff  /  btrfs  defaults,autodefrag,noatime 0 0
+    OLD_UUID=$(grep -o 'UUID=[^ ]*' "$1/etc/fstab" | head -n1 | cut -d= -f2)
+    # Example output line:
+    # Label: 'sailfish'  uuid: c973a422-ca53-4ac3-bc8b-60bbc6320cff
+    NEW_UUID=$(btrfs filesystem show | grep -o 'uuid:.*' | head -n1 | cut -d' ' -f2)
+
+    if [ "$OLD_UUID" != "$NEW_UUID" ]; then
+        echo "Old UUID: $OLD_UUID"
+        echo "New UUID: $NEW_UUID"
+        sed -i -e "s/$OLD_UUID/$NEW_UUID/g" "$1/etc/fstab"
+    else
+        echo "UUID ($OLD_UUID) is already correct"
+    fi
+}
+
 make_system_bootable() {
     if [ ! -d "$MOUNTPOINT/@" -o ! -d "$MOUNTPOINT/@home" ]; then
         fail "Cannot make system bootable (@ and @home missing)"
@@ -180,21 +198,7 @@ make_system_bootable() {
     chroot "$MOUNTPOINT/@" sh -c 'for i in /var/lib/platform-updates/*; do sh -x $i; done'
     umount "$MOUNTPOINT/@/sys" "$MOUNTPOINT/@/dev" "$MOUNTPOINT/@/proc"
 
-    echo "Fixing UUID in /etc/fstab of rootfs"
-    # Example output line:
-    # UUID=c973a422-ca53-4ac3-bc8b-60bbc6320cff  /  btrfs  defaults,autodefrag,noatime 0 0
-    OLD_UUID=$(grep -o 'UUID=[^ ]*' "$MOUNTPOINT/@/etc/fstab" | head -n1 | cut -d= -f2)
-    # Example output line:
-    # Label: 'sailfish'  uuid: c973a422-ca53-4ac3-bc8b-60bbc6320cff
-    NEW_UUID=$(btrfs filesystem show | grep -o 'uuid:.*' | head -n1 | cut -d' ' -f2)
-
-    if [ "$OLD_UUID" != "$NEW_UUID" ]; then
-        echo "Old UUID: $OLD_UUID"
-        echo "New UUID: $NEW_UUID"
-        sed -i -e "s/$OLD_UUID/$NEW_UUID/g" "$MOUNTPOINT/@/etc/fstab"
-    else
-        echo "UUID ($OLD_UUID) is already correct"
-    fi
+    fix_btrfs_uuid "$MOUNTPOINT/@"
 }
 
 make_subvolume_from_command() {
@@ -417,6 +421,7 @@ case $CMD in
         echo "Slipstreaming factory image"
         make_subvolume_from_command "$UTILITY_PATH @ $MOUNTPOINT/@ $MOUNTPOINT/*-@" "$TARGET-@"
         make_subvolume_from_command "$UTILITY_PATH @home $MOUNTPOINT/@home $MOUNTPOINT/*-@home" "$TARGET-@home"
+        fix_btrfs_uuid "$MOUNTPOINT/$TARGET-@"
         unmount_btrfs
         ;;
     export)
