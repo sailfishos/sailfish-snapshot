@@ -95,7 +95,7 @@ fail() {
 
 fail_usage() {
     usage
-    fail $*
+    fail "$@"
 }
 
 require_argument() {
@@ -124,7 +124,7 @@ snapshot_os_version() {
 
 snapshot_flags() {
     if [ ! -f $MOUNTPOINT/$1-@home/nemo/.jolla-startupwizard-done ]; then
-        echo -n ", factory"
+        printf ", factory"
     fi
 }
 
@@ -216,10 +216,10 @@ make_subvolume_from_tarball() {
 make_tarball_from_subvolume() {
     SUBVOLUME=$1
     TARBALL=$2
-    echo "Exporting $MOUNTPOINT/$1/ to $(basename $2)"
+    echo "Exporting $MOUNTPOINT/$SUBVOLUME/ to $(basename $TARBALL)"
     tar --create --bzip2 --atime-preserve --numeric-owner \
         --preserve-permissions --preserve-order --acls --xattrs \
-        --one-file-system --file $2 --directory=$MOUNTPOINT/$1/ .
+        --one-file-system --file $TARBALL --directory=$MOUNTPOINT/$SUBVOLUME/ .
     echo "Exporting done."
 }
 
@@ -305,7 +305,7 @@ case $CMD in
         fi
         mount_btrfs
         assume_snapshot_does_not_exist $DEST
-        if [ "$SOURCE" == "" ]; then
+        if [ "$SOURCE" = "" ]; then
             echo "Creating snapshot of current active system"
             create_snapshot @ $DEST-@
             create_snapshot @home $DEST-@home
@@ -317,9 +317,9 @@ case $CMD in
         unmount_btrfs
         ;;
     delete)
-        if [ "$1" == "" ]; then
+        if [ "$1" = "" ]; then
             fail_usage "Missing argument"
-        elif [ "$1" == "factory" ]; then
+        elif [ "$1" = "factory" ]; then
             fail "Deleting the factory snapshot is a really bad idea"
         fi
         SNAPSHOT="$1"
@@ -330,7 +330,7 @@ case $CMD in
         unmount_btrfs
         ;;
     restore)
-        if [ "$1" == "" ]; then
+        if [ "$1" = "" ]; then
             fail_usage "Missing argument"
         fi
         SNAPSHOT="$1"
