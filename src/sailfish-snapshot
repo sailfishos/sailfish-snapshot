@@ -18,14 +18,14 @@
 
 set -e
 
-PROG=$(basename $0)
+PROG=$(basename "$0")
 
 if [ "%PREFIX%" = '%'PREFIX'%' ]; then
     echo "Running from source. Set variables manually."
 else
     # Include configuration from system
     for file in %PREFIX%/share/$PROG/*.conf; do
-        . $file
+        . "$file"
     done
 fi
 
@@ -38,22 +38,22 @@ fi
 NOW=$(date +%s)
 
 mount_btrfs() {
-    if [ ! -d $MOUNTPOINT ]; then
-        mkdir -p $MOUNTPOINT
+    if [ ! -d "$MOUNTPOINT" ]; then
+        mkdir -p "$MOUNTPOINT"
     fi
 
-    if grep -q $MOUNTPOINT /proc/mounts; then
-        umount $MOUNTPOINT
+    if grep -q "$MOUNTPOINT" /proc/mounts; then
+        umount "$MOUNTPOINT"
     fi
-    mount -t btrfs -o subvolid=0 $PARTITION $MOUNTPOINT
+    mount -t btrfs -o subvolid=0 "$PARTITION" "$MOUNTPOINT"
 
     # Hack to get subvolume properly seen when "@" is mounted
-    ls -la $MOUNTPOINT >/dev/null 2>/dev/null
-    ls -la $MOUNTPOINT >/dev/null 2>/dev/null
+    ls -la "$MOUNTPOINT" >/dev/null 2>/dev/null
+    ls -la "$MOUNTPOINT" >/dev/null 2>/dev/null
 }
 
 unmount_btrfs() {
-    umount $MOUNTPOINT
+    umount "$MOUNTPOINT"
 }
 
 version_info() {
@@ -106,81 +106,84 @@ require_argument() {
 
 list_snapshots() {
     for d in $MOUNTPOINT/*-@; do
-        BASENAME=$(basename $d | sed -e 's/-@$//g')
-        if [ -d $d -a -d $MOUNTPOINT/${BASENAME}-@home ]; then
+        BASENAME=$(basename "$d" | sed -e 's/-@$//g')
+        if [ -d "$d" -a -d "$MOUNTPOINT/${BASENAME}-@home" ]; then
             echo "$BASENAME"
         fi
     done
 }
 
 snapshot_os_version() {
-    if [ -d $MOUNTPOINT/$1-@ ]; then
+    SNAPSHOT_NAME="$1"
+    SUBVOLUME_PATH="$MOUNTPOINT/$SNAPSHOT_NAME-@"
+    RELEASE_FILE="$SUBVOLUME_PATH/etc/sailfish-release"
+    if [ -d "$SUBVOLUME_PATH" -a -f "$RELEASE_FILE" ]; then
         # Example line: "VERSION_ID=1.0.6.10"
-        grep VERSION_ID $MOUNTPOINT/$1-@/etc/sailfish-release | cut -d= -f2
+        grep VERSION_ID "$RELEASE_FILE" | cut -d= -f2
     else
         echo "???"
     fi
 }
 
 snapshot_flags() {
-    if [ ! -f $MOUNTPOINT/$1-@home/nemo/.jolla-startupwizard-done ]; then
+    if [ ! -f "$MOUNTPOINT/$1-@home/nemo/.jolla-startupwizard-done" ]; then
         printf ", factory"
     fi
 }
 
 create_snapshot() {
-    btrfs subvolume snapshot $MOUNTPOINT/$1 $MOUNTPOINT/$2
+    btrfs subvolume snapshot "$MOUNTPOINT/$1" "$MOUNTPOINT/$2"
 }
 
 delete_snapshot() {
-    if [ ! -d $MOUNTPOINT/$1 ]; then
+    if [ ! -d "$MOUNTPOINT/$1" ]; then
         fail "Snapshot does not exist: $1"
     fi
-    (cd $MOUNTPOINT && btrfs subvolume delete $1)
+    (cd "$MOUNTPOINT" && btrfs subvolume delete "$1")
 }
 
 rename_snapshot() {
-    if [ ! -d $MOUNTPOINT/$1 ]; then
+    if [ ! -d "$MOUNTPOINT/$1" ]; then
         fail "Rename source does not exist: $1"
     fi
-    if [ -d $MOUNTPOINT/$2 ]; then
+    if [ -d "$MOUNTPOINT/$2" ]; then
         fail "Rename target already exists: $2"
     fi
-    mv $MOUNTPOINT/$1 $MOUNTPOINT/$2
+    mv "$MOUNTPOINT/$1" "$MOUNTPOINT/$2"
 }
 
 assume_snapshot_exists() {
-    if [ ! -d $MOUNTPOINT/$1-@ -o ! -d $MOUNTPOINT/$1-@home ]; then
+    if [ ! -d "$MOUNTPOINT/$1-@" -o ! -d "$MOUNTPOINT/$1-@home" ]; then
         fail "Snapshot does not exist: $1"
     fi
 }
 
 assume_snapshot_does_not_exist() {
-    if [ -d $MOUNTPOINT/$1-@ -o -d $MOUNTPOINT/$1-@home ]; then
+    if [ -d "$MOUNTPOINT/$1-@" -o -d "$MOUNTPOINT/$1-@home" ]; then
         fail "Snapshot already exists: $1"
     fi
 }
 
 make_system_bootable() {
-    if [ ! -d $MOUNTPOINT/@ -o ! -d $MOUNTPOINT/@home ]; then
+    if [ ! -d "$MOUNTPOINT/@" -o ! -d "$MOUNTPOINT/@home" ]; then
         fail "Cannot make system bootable (@ and @home missing)"
     fi
 
     echo "Marking @ as default subvolume"
-    SUBVOLID=$(btrfs subvolume list $MOUNTPOINT | sed -n 's/ID\ \([0-9]*\).*path\ @$/\1/p')
-    (cd $MOUNTPOINT && btrfs subvolume set-default $SUBVOLID .)
+    SUBVOLID="$(btrfs subvolume list "$MOUNTPOINT" | sed -n 's/ID\ \([0-9]*\).*path\ @$/\1/p')"
+    (cd "$MOUNTPOINT" && btrfs subvolume set-default "$SUBVOLID" .)
 
     echo "Running partition flash scripts"
-    mount --bind /sys $MOUNTPOINT/@/sys
-    mount --bind /dev $MOUNTPOINT/@/dev
-    mount --bind /proc $MOUNTPOINT/@/proc
-    chroot $MOUNTPOINT/@  sh -c 'for i in /var/lib/platform-updates/*; do sh -x $i; done'
-    umount $MOUNTPOINT/@/sys $MOUNTPOINT/@/dev $MOUNTPOINT/@/proc
+    mount --bind /sys "$MOUNTPOINT/@/sys"
+    mount --bind /dev "$MOUNTPOINT/@/dev"
+    mount --bind /proc "$MOUNTPOINT/@/proc"
+    chroot "$MOUNTPOINT/@" sh -c 'for i in /var/lib/platform-updates/*; do sh -x $i; done'
+    umount "$MOUNTPOINT/@/sys" "$MOUNTPOINT/@/dev" "$MOUNTPOINT/@/proc"
 
     echo "Fixing UUID in /etc/fstab of rootfs"
     # Example output line:
     # UUID=c973a422-ca53-4ac3-bc8b-60bbc6320cff  /  btrfs  defaults,autodefrag,noatime 0 0
-    OLD_UUID=$(grep -o 'UUID=[^ ]*' $MOUNTPOINT/@/etc/fstab | head -n1 | cut -d= -f2)
+    OLD_UUID=$(grep -o 'UUID=[^ ]*' "$MOUNTPOINT/@/etc/fstab" | head -n1 | cut -d= -f2)
     # Example output line:
     # Label: 'sailfish'  uuid: c973a422-ca53-4ac3-bc8b-60bbc6320cff
     NEW_UUID=$(btrfs filesystem show | grep -o 'uuid:.*' | head -n1 | cut -d' ' -f2)
@@ -188,7 +191,7 @@ make_system_bootable() {
     if [ "$OLD_UUID" != "$NEW_UUID" ]; then
         echo "Old UUID: $OLD_UUID"
         echo "New UUID: $NEW_UUID"
-        sed -i -e "s/$OLD_UUID/$NEW_UUID/g" $MOUNTPOINT/@/etc/fstab
+        sed -i -e "s/$OLD_UUID/$NEW_UUID/g" "$MOUNTPOINT/@/etc/fstab"
     else
         echo "UUID ($OLD_UUID) is already correct"
     fi
@@ -198,28 +201,28 @@ make_subvolume_from_command() {
     CMD_TO_RUN="$1"
     SUBVOLUME_TO_CREATE="$MOUNTPOINT/$2"
 
-    btrfs subvolume create $SUBVOLUME_TO_CREATE
+    btrfs subvolume create "$SUBVOLUME_TO_CREATE"
     echo "Running '${CMD_TO_RUN}' in ${SUBVOLUME_TO_CREATE}..."
     (set -e && cd "${SUBVOLUME_TO_CREATE}" && ${CMD_TO_RUN})
     echo "done."
 }
 
 make_subvolume_from_tarball() {
-    btrfs subvolume create $MOUNTPOINT/$2
-    echo "Extracting $(basename $1) to $MOUNTPOINT/$2/"
+    btrfs subvolume create "$MOUNTPOINT/$2"
+    echo "Extracting $(basename "$1") to $MOUNTPOINT/$2/"
     tar --extract --bzip2 --atime-preserve --numeric-owner \
         --preserve-permissions --preserve-order --acls --xattrs \
-        --file $1 -C $MOUNTPOINT/$2/
+        --file "$1" -C "$MOUNTPOINT/$2/"
     echo "Extraction done."
 }
 
 make_tarball_from_subvolume() {
-    SUBVOLUME=$1
-    TARBALL=$2
-    echo "Exporting $MOUNTPOINT/$SUBVOLUME/ to $(basename $TARBALL)"
+    SUBVOLUME="$1"
+    TARBALL="$2"
+    echo "Exporting $MOUNTPOINT/$SUBVOLUME/ to $(basename "$TARBALL")"
     tar --create --bzip2 --atime-preserve --numeric-owner \
         --preserve-permissions --preserve-order --acls --xattrs \
-        --one-file-system --file $TARBALL --directory=$MOUNTPOINT/$SUBVOLUME/ .
+        --one-file-system --file "$TARBALL" --directory="$MOUNTPOINT/$SUBVOLUME/" .
     echo "Exporting done."
 }
 
@@ -244,9 +247,9 @@ case $CMD in
     list)
         mount_btrfs
         for snapshot in $(list_snapshots); do
-            VERSION=$(snapshot_os_version $snapshot)
-            FLAGS=$(snapshot_flags $snapshot)
-            echo " - $(printf "%-30s" $snapshot)    (Sailfish OS $VERSION$FLAGS)"
+            VERSION=$(snapshot_os_version "$snapshot")
+            FLAGS=$(snapshot_flags "$snapshot")
+            echo " - $(printf "%-30s" "$snapshot")    (Sailfish OS $VERSION$FLAGS)"
         done
         unmount_btrfs
         ;;
@@ -260,7 +263,7 @@ case $CMD in
     enter)
         if [ $# -eq 1 ]; then
             mount_btrfs
-            assume_snapshot_exists $1
+            assume_snapshot_exists "$1"
             unmount_btrfs
             ROOTFS="$1-@"
             HOMEFS="$1-@home"
@@ -271,24 +274,24 @@ case $CMD in
         fi
 
         echo "Mounting / from $ROOTFS"
-        mount -t btrfs -o subvol=$ROOTFS $PARTITION $MOUNTPOINT
+        mount -t btrfs -o subvol="$ROOTFS" "$PARTITION" "$MOUNTPOINT"
         echo "Mounting /home from $HOMEFS"
-        mount -t btrfs -o subvol=$HOMEFS $PARTITION $MOUNTPOINT/home
+        mount -t btrfs -o subvol="$HOMEFS" "$PARTITION" "$MOUNTPOINT/home"
         for path in /proc /sys /dev; do
             echo "Bind-mounting $path"
-            mount --bind $path $MOUNTPOINT$path
+            mount --bind "${path:?}" "${MOUNTPOINT:?}${path:?}"
         done
 
         echo "Entering chroot"
-        chroot $MOUNTPOINT
+        chroot "${MOUNTPOINT:?}"
 
         for path in /proc /sys /dev /home; do
             echo "Unmounting $path"
-            umount $MOUNTPOINT$path
+            umount "${MOUNTPOINT:?}${path:?}"
         done
 
         echo "Unmounting rootfs"
-        umount $MOUNTPOINT
+        umount "$MOUNTPOINT"
         ;;
     create)
         if [ $# -eq 1 ]; then
@@ -304,15 +307,15 @@ case $CMD in
             fail_usage "Missing argument(s)"
         fi
         mount_btrfs
-        assume_snapshot_does_not_exist $DEST
+        assume_snapshot_does_not_exist "$DEST"
         if [ "$SOURCE" = "" ]; then
             echo "Creating snapshot of current active system"
-            create_snapshot @ $DEST-@
-            create_snapshot @home $DEST-@home
+            create_snapshot @ "$DEST-@"
+            create_snapshot @home "$DEST-@home"
         else
             echo "Creating snapshot of $SOURCE"
-            create_snapshot $SOURCE-@ $DEST-@
-            create_snapshot $SOURCE-@home $DEST-@home
+            create_snapshot "$SOURCE-@" "$DEST-@"
+            create_snapshot "$SOURCE-@home" "$DEST-@home"
         fi
         unmount_btrfs
         ;;
@@ -325,8 +328,8 @@ case $CMD in
         SNAPSHOT="$1"
         shift
         mount_btrfs
-        delete_snapshot $SNAPSHOT-@
-        delete_snapshot $SNAPSHOT-@home
+        delete_snapshot "$SNAPSHOT-@"
+        delete_snapshot "$SNAPSHOT-@home"
         unmount_btrfs
         ;;
     restore)
@@ -336,15 +339,15 @@ case $CMD in
         SNAPSHOT="$1"
         shift
         mount_btrfs
-        assume_snapshot_exists $SNAPSHOT
+        assume_snapshot_exists "$SNAPSHOT"
 
         # Backup current system system
-        rename_snapshot @ saved-$NOW-@
-        rename_snapshot @home saved-$NOW-@home
+        rename_snapshot @ "saved-$NOW-@"
+        rename_snapshot @home "saved-$NOW-@home"
 
         # Move snapshot to current system
-        create_snapshot $SNAPSHOT-@ @
-        create_snapshot $SNAPSHOT-@home @home
+        create_snapshot "$SNAPSHOT-@" @
+        create_snapshot "$SNAPSHOT-@home" @home
 
         # Make new current system bootable
         make_system_bootable
@@ -361,10 +364,10 @@ case $CMD in
             fail_usage "Missing arguments"
         fi
         mount_btrfs
-        assume_snapshot_exists $SOURCE
+        assume_snapshot_exists "$SOURCE"
         echo "Renaming: $SOURCE -> $DEST"
-        rename_snapshot $SOURCE-@ $DEST-@
-        rename_snapshot $SOURCE-@home $DEST-@home
+        rename_snapshot "$SOURCE-@" "$DEST-@"
+        rename_snapshot "$SOURCE-@home" "$DEST-@home"
         unmount_btrfs
         ;;
     inject)
@@ -387,12 +390,12 @@ case $CMD in
         fi
 
         mount_btrfs
-        assume_snapshot_does_not_exist $TARGET
+        assume_snapshot_does_not_exist "$TARGET"
         echo "Slipstreaming factory image"
         echo "rootfs from $ROOTFS_TAR"
         echo "homefs from $HOMEFS_TAR"
-        make_subvolume_from_tarball $ROOTFS_TAR $TARGET-@
-        make_subvolume_from_tarball $HOMEFS_TAR $TARGET-@home
+        make_subvolume_from_tarball "$ROOTFS_TAR" "$TARGET-@"
+        make_subvolume_from_tarball "$HOMEFS_TAR" "$TARGET-@home"
         unmount_btrfs
         ;;
     deploy)
@@ -410,7 +413,7 @@ case $CMD in
         fi
 
         mount_btrfs
-        assume_snapshot_does_not_exist $TARGET
+        assume_snapshot_does_not_exist "$TARGET"
         echo "Slipstreaming factory image"
         make_subvolume_from_command "$UTILITY_PATH @ $MOUNTPOINT/@ $MOUNTPOINT/*-@" "$TARGET-@"
         make_subvolume_from_command "$UTILITY_PATH @home $MOUNTPOINT/@home $MOUNTPOINT/*-@home" "$TARGET-@home"
@@ -427,9 +430,9 @@ case $CMD in
         fi
 
         mount_btrfs
-        assume_snapshot_exists $SOURCE
+        assume_snapshot_exists "$SOURCE"
 
-        VERSION="$(snapshot_os_version $SOURCE)"
+        VERSION=$(snapshot_os_version "$SOURCE")
         ROOTFS_TAR="$OUTDIR/rootfs-$SOURCE-$VERSION.tar.bz2"
         HOMEFS_TAR="$OUTDIR/homefs-$SOURCE-$VERSION.tar.bz2"
 
@@ -440,8 +443,8 @@ case $CMD in
             fail "homefs tarball already exists: $HOMEFS_TAR"
         fi
 
-        make_tarball_from_subvolume $SOURCE-@ $ROOTFS_TAR
-        make_tarball_from_subvolume $SOURCE-@home $HOMEFS_TAR
+        make_tarball_from_subvolume "$SOURCE-@" "$ROOTFS_TAR"
+        make_tarball_from_subvolume "$SOURCE-@home" "$HOMEFS_TAR"
         unmount_btrfs
         ;;
     -h|--help|help)
