@@ -208,7 +208,20 @@ make_subvolume_from_command() {
     btrfs subvolume create "$SUBVOLUME_TO_CREATE"
     echo "Running '${CMD_TO_RUN}' in ${SUBVOLUME_TO_CREATE}..."
     (set -e && cd "${SUBVOLUME_TO_CREATE}" && ${CMD_TO_RUN})
+    RESULT="$?"
     echo "done."
+    return "$RESULT"
+}
+
+cleanup_snapshots_and_fail() {
+    MESSAGE="$1"
+    shift
+    while [ "$#" -gt 0 ]; do
+        echo "Cleaning up failed snapshot: $1"
+        delete_snapshot "$1"
+        shift
+    done
+    fail "$MESSAGE"
 }
 
 make_subvolume_from_tarball() {
@@ -419,8 +432,10 @@ case $CMD in
         mount_btrfs
         assume_snapshot_does_not_exist "$TARGET"
         echo "Slipstreaming factory image"
-        make_subvolume_from_command "$UTILITY_PATH @ $MOUNTPOINT/@ $MOUNTPOINT/*-@" "$TARGET-@"
-        make_subvolume_from_command "$UTILITY_PATH @home $MOUNTPOINT/@home $MOUNTPOINT/*-@home" "$TARGET-@home"
+        make_subvolume_from_command "$UTILITY_PATH @ $MOUNTPOINT/@ $MOUNTPOINT/*-@" "$TARGET-@" || \
+            cleanup_snapshots_and_fail "Deploying rootfs failed." "$TARGET-@"
+        make_subvolume_from_command "$UTILITY_PATH @home $MOUNTPOINT/@home $MOUNTPOINT/*-@home" "$TARGET-@home" || \
+            cleanup_snapshots_and_fail "Deploying homefs failed." "$TARGET-@" "$TARGET-@home"
         fix_btrfs_uuid "$MOUNTPOINT/$TARGET-@"
         unmount_btrfs
         ;;
