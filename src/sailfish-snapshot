@@ -286,6 +286,9 @@ case $CMD in
             HOMEFS="$1-@home"
             shift
         else
+            mount_btrfs
+            assume_snapshot_exists @
+            umount_btrfs
             ROOTFS="@"
             HOMEFS="@home"
         fi
